@@ -5,7 +5,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 const app = express();
 app.use(cors());
 app.use(express.json());
-const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_API_KEY });
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const usageStore = {};
 function getUsageKey(salonId) {
   const now = new Date();
