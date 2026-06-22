@@ -1,60 +1,43 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const Anthropic = require('@anthropic-ai/sdk');
+const https = require('https');
 const app = express();
 app.use(cors());
 app.use(express.json());
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const usageStore = {};
-function getUsageKey(salonId) {
-  const now = new Date();
-  return `${salonId}:${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-}
-function incrementUsage(salonId) {
-  const key = getUsageKey(salonId);
-  usageStore[key] = (usageStore[key] || 0) + 1;
-}
-function buildSystemPrompt(salonConfig) {
-  const { name, services, hours, location, notes } = salonConfig || {};
-  let prompt = `You are a helpful booking assistant for a salon`;
-  if (name) prompt += ` called "${name}"`;
-  prompt += `. Help customers book appointments and answer questions.`;
-  if (location) prompt += `\n\nLocation: ${location}`;
-  if (hours) prompt += `\n\nHours: ${hours}`;
-  if (services) prompt += `\n\nServices: ${Array.isArray(services) ? services.join(', ') : services}`;
-  if (notes) prompt += `\n\nNotes: ${notes}`;
-  prompt += `\n\nBe friendly and concise. Collect name, service, date/time and contact number for bookings.`;
-  return prompt;
-}
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-app.get('/usage', (req, res) => {
-  const result = {};
-  for (const [key, count] of Object.entries(usageStore)) {
-    const [salonId, month] = key.split(':');
-    if (!result[salonId]) result[salonId] = {};
-    result[salonId][month] = count;
-  }
-  res.json(result);
-});
-app.post('/chat', async (req, res) => {
+app.get('/usage', (req, res) => res.json(usageStore));
+app.post('/chat', (req, res) => {
   const { messages, salonConfig } = req.body;
-  if (!messages || !Array.isArray(messages) || messages.length === 0) {
+  if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages array is required' });
   }
-  const salonId = salonConfig?.name?.toLowerCase().replace(/\s+/g, '_') || 'default';
-  try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: buildSystemPrompt(salonConfig),
-      messages: messages,
+  const name = (salonConfig && salonConfig.name) || 'the salon';
+  const services = (salonConfig && salonConfig.services) || '';
+  const hours = (salonConfig && salonConfig.hours) || '';
+  const location = (salonConfig && salonConfig.location) || '';
+  const notes = (salonConfig && salonConfig.notes) || '';
+  const systemPrompt = `You are a friendly booking assistant for ${name}. Help customers book appointments and answer questions. Services: ${services}. Hours: ${hours}. Location: ${location}. Notes: ${notes}. Be concise and collect name, service, date/time and contact number for bookings.`;
+  const body = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1024, system: systemPrompt, messages: messages });
+  const options = {
+    hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Length': Buffer.byteLength(body) }
+  };
+  const apiReq = https.request(options, (apiRes) => {
+    let data = '';
+    apiRes.on('data', chunk => data += chunk);
+    apiRes.on('end', () => {
+      try {
+        const parsed = JSON.parse(data);
+        const reply = parsed.content[0].text;
+        usageStore[name] = (usageStore[name] || 0) + 1;
+        res.json({ reply });
+      } catch(e) { res.status(500).json({ error: 'Parse error' }); }
     });
-    incrementUsage(salonId);
-    res.json({ reply: response.content[0].text });
-  } catch (error) {
-    console.error('Error:', error.message);
-    res.status(500).json({ error: 'Failed to get response' });
-  }
+  });
+  apiReq.on('error', (e) => res.status(500).json({ error: e.message }));
+  apiReq.write(body);
+  apiReq.end();
 });
-app.listen(process.env.PORT || 3000, '0.0.0.0', () => console.log('Server running'));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => console.log('Server running on port ' + PORT));
