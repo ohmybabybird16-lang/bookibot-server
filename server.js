@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const https = require('https');
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 const usageStore = {};
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
